@@ -1,0 +1,164 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background-color: #000000;
+    color: #ffffff;
+  }
+  code, pre, .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+/* Organic breathing keyframe for Idle state */
+@keyframes organicBreathe {
+  0%, 100% {
+    transform: scale(0.97);
+    filter: drop-shadow(0 0 25px rgba(6, 182, 212, 0.15));
+  }
+  50% {
+    transform: scale(1.03);
+    filter: drop-shadow(0 0 45px rgba(34, 211, 238, 0.28));
+  }
+}
+
+/* Organic breathing keyframe for Listening state */
+@keyframes listenBreathe {
+  0%, 100% {
+    transform: scale(1.03);
+    filter: drop-shadow(0 0 40px rgba(34, 211, 238, 0.35));
+  }
+  50% {
+    transform: scale(1.09);
+    filter: drop-shadow(0 0 65px rgba(34, 211, 238, 0.55));
+  }
+}
+
+/* Organic breathing keyframe for Thinking state */
+@keyframes thinkingBreathe {
+  0%, 100% {
+    transform: scale(1.0);
+    filter: drop-shadow(0 0 35px rgba(6, 182, 212, 0.3));
+  }
+  50% {
+    transform: scale(1.06);
+    filter: drop-shadow(0 0 55px rgba(14, 165, 233, 0.45));
+  }
+}
+
+/* Organic breathing keyframe for Speaking state */
+@keyframes speakBreathe {
+  0%, 100% {
+    transform: scale(1.05);
+    filter: drop-shadow(0 0 50px rgba(34, 211, 238, 0.45));
+  }
+  50% {
+    transform: scale(1.13);
+    filter: drop-shadow(0 0 85px rgba(34, 211, 238, 0.7));
+  }
+}
+
+.animate-breathe-idle {
+  animation: organicBreathe 5.5s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.animate-breathe-listening {
+  animation: listenBreathe 2.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.animate-breathe-thinking {
+  animation: thinkingBreathe 2.0s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.animate-breathe-speaking {
+  animation: speakBreathe 1.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@keyframes spinSlow {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes spinReverseSlow {
+  from {
+    transform: rotate(360deg);
+  }
+  to {
+    transform: rotate(0deg);
+  }
+}
+
+@keyframes pulseGlow {
+  0%, 100% {
+    opacity: 0.15;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(1.08);
+  }
+}
+
+.animate-spin-slow {
+  animation: spinSlow 20s linear infinite;
+}
+
+.animate-spin-reverse-slow {
+  animation: spinReverseSlow 25s linear infinite;
+}
+
+.animate-pulse-glow {
+  animation: pulseGlow 4s ease-in-out infinite;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -20px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-slide-down {
+  animation: slideDown 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.2s ease-out forwards;
+}
+
+/* Custom sleek futuristic scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(5, 5, 5, 0.8);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(34, 211, 238, 0.5);
+}
