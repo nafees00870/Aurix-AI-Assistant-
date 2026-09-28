@@ -1,6 +1,7 @@
 {
   "name": "Aurix AI",
   "description": "Real-time, voice-to-voice AI assistant with a witty persona created by Nafees Kiani.",
-  "requestFramePermissions": ["microphone"],
+  "requestFramePermissions": ["microphone", "geolocation"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
+

@@ -117,6 +117,12 @@ export class ToolExecutionManager {
 
   private getDefaultTitle(toolName: string, data: any): string {
     switch (toolName) {
+      case 'getCurrentTimeAndDate':
+        return data?.time12 ? `Live Clock: ${data.time12} (${data.timezone || 'Local'})` : 'Live Device Clock';
+      case 'getWeather':
+        return data?.location ? `Weather in ${data.location}: ${data.temperatureC}°C (${data.condition || ''})` : 'Live Weather Forecast';
+      case 'getUserLocation':
+        return data?.city ? `Location: ${data.city}${data.country ? `, ${data.country}` : ''}` : 'Detected Location';
       case 'openWebsite':
         return data?.searchQuery ? `Searching for "${data.searchQuery}"` : `Navigating to ${data?.service || 'Website'}`;
       case 'searchWeb':

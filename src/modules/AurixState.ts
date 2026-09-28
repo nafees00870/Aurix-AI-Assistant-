@@ -74,6 +74,43 @@ export const THEMES: Record<VisualizerThemeKey, VisualizerTheme> = {
 
 export type FeedbackRating = 'thumbs_up' | 'thumbs_down';
 
+export type AurixVoiceKey = 'male' | 'female' | 'baby';
+
+export const AURIX_VOICE_STORAGE_KEY = 'aurix_selected_voice';
+
+export interface AurixVoiceConfig {
+  key: AurixVoiceKey;
+  label: string;
+  geminiVoiceName: string;
+  description: string;
+  tonePrompt: string;
+}
+
+export const AURIX_VOICES: Record<AurixVoiceKey, AurixVoiceConfig> = {
+  male: {
+    key: 'male',
+    label: 'Male',
+    geminiVoiceName: 'Fenrir',
+    description: 'Crisp, deep & articulate male voice',
+    tonePrompt: 'Maintain a confident, charismatic, articulate, witty male voice tone.',
+  },
+  female: {
+    key: 'female',
+    label: 'Female',
+    geminiVoiceName: 'Aoede',
+    description: 'Warm, bright & eloquent female voice',
+    tonePrompt: 'Maintain a warm, bright, witty, articulate, melodic female voice tone.',
+  },
+  baby: {
+    key: 'baby',
+    label: 'Baby',
+    geminiVoiceName: 'Aoede',
+    description: 'Chhota 2-3 saal ka pyara baby voice',
+    tonePrompt:
+      'You are Aurix, speaking with the authentic, adorable voice, innocence, and persona of a very small 2-to-3-year-old toddler / baby child (bilkul 2-3 saal ka chhota pyara bacha). Your speech is sweet, cute, soft, innocent, and joyful. Use simple words, short sentences, natural baby curiosity, and cute enthusiastic toddler reactions (e.g. "Yay!", "Ooh dekho!", "Mela naam Aurix hai!", "Hehe!"). Speak in a relaxed, gentle, cute child tempo with sweet natural pauses. Never use adult, formal, robotic, or sarcastic tones. You are genuinely a sweet, playful 2-year-old child helping your best friend.',
+  },
+};
+
 export type FeedbackCategory =
   | 'personality'
   | 'accuracy'

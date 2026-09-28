@@ -35,9 +35,10 @@ export class AudioStreamer {
 
   // Playback queue & scheduling
   private nextStartTime = 0;
-  private activeSources: AudioBufferSourceNode[] = [];
+  private activeSources: { id: string; node: AudioBufferSourceNode }[] = [];
   private isPlaying = false;
   private playbackCheckInterval: number | null = null;
+  private sourceCounter = 0;
 
   // User Voice Activity Detection & Interruption
   private isUserSpeaking = false;
@@ -443,9 +444,10 @@ export class AudioStreamer {
     }
 
     /**
-     * Jitter-buffered, continuous gapless playback of 24,000 Hz PCM16 chunks received from Gemini Live.
+     * Jitter-buffered, continuous gapless single-path playback of 24,000 Hz PCM16 chunks received from Gemini Live.
+     * Clean, dry, single-voice audio playback with zero duplicate processing, echo, or artificial doubling.
      */
-    public async playPcm24Chunk(base64Audio: string): Promise<void> {
+    public async playPcm24Chunk(base64Audio: string, voiceKey: string = 'male'): Promise<void> {
       this.initPlaybackContext();
       if (!this.outputAudioCtx || !this.outputAnalyser) return;
 
@@ -454,8 +456,6 @@ export class AudioStreamer {
           await this.outputAudioCtx.resume();
         } catch (e) {}
       }
-
-      console.log(`[Audio] AudioContext state: ${this.outputAudioCtx.state}`);
 
       try {
         const binaryString = atob(base64Audio);
@@ -478,12 +478,22 @@ export class AudioStreamer {
         const audioBuffer = this.outputAudioCtx.createBuffer(1, numSamples, 24000);
         audioBuffer.getChannelData(0).set(float32Array);
 
+        this.sourceCounter++;
+        const sourceId = `src_${this.sourceCounter}_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
+
         const source = this.outputAudioCtx.createBufferSource();
         source.buffer = audioBuffer;
+
+        const isBabyVoice = voiceKey === 'baby';
+        const playbackRate = isBabyVoice ? 1.25 : 1.0;
+        source.playbackRate.value = playbackRate;
+
+        // EXACT SINGLE OUTPUT PATH: BufferSource -> outputAnalyser -> destination
         source.connect(this.outputAnalyser);
 
         const currentTime = this.outputAudioCtx.currentTime;
-        const initialLeadSec = 0.05; // 50ms pre-roll jitter buffer to absorb network variations
+        const initialLeadSec = 0.04; // 40ms pre-roll jitter buffer to absorb network variations
+        const effectiveDuration = audioBuffer.duration / playbackRate;
 
         // Check if starting fresh or recovering from an underrun gap
         if (this.activeSources.length === 0 || this.nextStartTime < currentTime) {
@@ -492,26 +502,33 @@ export class AudioStreamer {
             console.warn(`[Audio] Buffer underrun: gap of ${gapMs.toFixed(1)} ms, resyncing playback schedule`);
           }
           this.nextStartTime = currentTime + initialLeadSec;
-          console.log(`[Audio] Playback started | Initial Jitter Buffer: ${(initialLeadSec * 1000).toFixed(0)} ms | Scheduled at: ${this.nextStartTime.toFixed(3)} s`);
+          console.log(`[Audio] Playback started | Initial Jitter Buffer: ${(initialLeadSec * 1000).toFixed(0)} ms | Scheduled at: ${this.nextStartTime.toFixed(3)} s | Voice: ${voiceKey} (Rate: ${playbackRate}x)`);
         }
 
         const scheduledTime = this.nextStartTime;
         source.start(scheduledTime);
-        this.nextStartTime = scheduledTime + audioBuffer.duration;
+        this.nextStartTime = scheduledTime + effectiveDuration;
 
-        this.activeSources.push(source);
+        console.log('[AudioPlayback] START');
+        console.log(`[AudioPlayback] sourceId: ${sourceId}`);
+        console.log(`[Audio] Chunk received: ${base64Audio.length} chars | Samples: ${numSamples} (${(audioBuffer.duration * 1000).toFixed(1)} ms) | Voice: ${voiceKey} | Active Sources: ${this.activeSources.length + 1} | Scheduled at: ${scheduledTime.toFixed(3)} s`);
+
+        const entry = { id: sourceId, node: source };
+        this.activeSources.push(entry);
+
         if (!this.isPlaying) {
           this.isPlaying = true;
           this.config.onPlaybackStateChange?.(true);
         }
 
-        console.log(`[Audio] Chunk received: ${base64Audio.length} chars | [Audio] Chunk size: ${numSamples} samples (${(audioBuffer.duration * 1000).toFixed(1)} ms) | [Audio] Queue length: ${this.activeSources.length} | [Audio] Playback scheduled at: ${scheduledTime.toFixed(3)} s`);
-
         source.onended = () => {
-          const idx = this.activeSources.indexOf(source);
+          const idx = this.activeSources.indexOf(entry);
           if (idx !== -1) {
             this.activeSources.splice(idx, 1);
           }
+          try {
+            source.disconnect();
+          } catch (e) {}
 
           if (this.activeSources.length === 0 && this.outputAudioCtx) {
             if (this.outputAudioCtx.currentTime >= this.nextStartTime - 0.025) {
@@ -524,7 +541,7 @@ export class AudioStreamer {
       } catch (err) {
         console.error('[AudioStreamer] Error decoding and playing audio chunk:', err);
       }
-  }
+    }
 
   /**
    * Instantly stops audio playback when interrupted.
@@ -532,10 +549,10 @@ export class AudioStreamer {
   public interruptPlayback(): void {
     if (this.activeSources.length > 0 || this.isPlaying) {
       console.log(`[Audio] Response interrupted. Stopping ${this.activeSources.length} active scheduled sources.`);
-      for (const src of this.activeSources) {
+      for (const item of this.activeSources) {
         try {
-          src.stop();
-          src.disconnect();
+          item.node.stop();
+          item.node.disconnect();
         } catch (e) {}
       }
       this.activeSources = [];

@@ -7,7 +7,9 @@
 
 import { AudioStreamer } from './AudioStreamer';
 import { ToolExecutionManager } from './ToolExecution';
-import { AurixConnectionState, TranscriptItem } from './AurixState';
+import { AurixConnectionState, TranscriptItem, AurixVoiceKey } from './AurixState';
+import { deviceContext, DeviceContextManager } from './DeviceContext';
+import { apiKeyManager } from './ApiKeyManager';
 
 export interface LiveSessionCallbacks {
   onStateChange: (state: AurixConnectionState) => void;
@@ -30,6 +32,7 @@ export class LiveSession {
   private isExplicitlyClosed = false;
   private isMicActive = false;
   private isProcessingRest = false;
+  private currentVoice: AurixVoiceKey = 'male';
 
   // Stable Turn Aggregators for Real-Time Streaming
   private currentModelTurnId: string | null = null;
@@ -40,10 +43,13 @@ export class LiveSession {
   constructor(
     toolManager: ToolExecutionManager,
     callbacks: LiveSessionCallbacks,
-    audioStreamer?: AudioStreamer
+    audioStreamer?: AudioStreamer,
+    initialVoice: AurixVoiceKey = 'male'
   ) {
     this.toolManager = toolManager;
     this.callbacks = callbacks;
+    this.currentVoice = initialVoice;
+    console.log(`[LiveSession] Current voice: ${this.currentVoice}`);
 
     this.audioStreamer =
       audioStreamer ||
@@ -68,7 +74,7 @@ export class LiveSession {
           this.sendInterruptSignal();
         },
         onError: (errMsg, stage) => {
-          console.error(`[LiveSession] Audio pipeline error at [${stage}]:`, errMsg);
+          console.warn(`[LiveSession] Audio pipeline notice at [${stage}]:`, errMsg);
           this.callbacks.onError(errMsg, true);
         },
       });
@@ -76,6 +82,56 @@ export class LiveSession {
 
   public getAudioStreamer(): AudioStreamer {
     return this.audioStreamer;
+  }
+
+  public getVoice(): AurixVoiceKey {
+    return this.currentVoice;
+  }
+
+  public async setVoice(voice: AurixVoiceKey): Promise<void> {
+    console.log(`[Voice] Selected: ${voice}`);
+    console.log(`[LiveSession] Current voice: ${voice}`);
+
+    if (this.currentVoice === voice) return;
+    this.currentVoice = voice;
+
+    // 1. Immediately and safely stop/flush active audio playback to prevent overlap
+    this.audioStreamer.interruptPlayback();
+    this.currentModelTurnId = null;
+    this.currentModelTurnText = '';
+
+    // 2. If WebSocket is connected, reconfigure live session dynamically on the backend
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(
+        JSON.stringify({
+          type: 'reconfigure_voice',
+          voice,
+        })
+      );
+    }
+  }
+
+  public async playVoicePreview(voice: AurixVoiceKey): Promise<void> {
+    this.audioStreamer.interruptPlayback();
+    this.audioStreamer.initPlaybackContext();
+
+    try {
+      const userKey = apiKeyManager.getApiKey();
+      const headers: Record<string, string> = {};
+      if (userKey) {
+        headers['x-gemini-api-key'] = userKey;
+      }
+      const keyParam = userKey ? `&apiKey=${encodeURIComponent(userKey)}` : '';
+      const res = await fetch(`/api/voice-preview?voice=${encodeURIComponent(voice)}${keyParam}`, { headers });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (data.audio) {
+        await this.audioStreamer.playPcm24Chunk(data.audio, voice);
+        this.setState('speaking');
+      }
+    } catch (err: any) {
+      console.warn('[LiveSession] Voice preview error:', err?.message || err);
+    }
   }
 
   public getIsMicActive(): boolean {
@@ -94,7 +150,7 @@ export class LiveSession {
       this.callbacks.onStatusMessage?.('Microphone active • PCM16 16kHz Streaming');
       return true;
     } catch (err: any) {
-      console.error('[LiveSession] Error enabling microphone:', err);
+      console.warn('[LiveSession] Microphone access notice:', err?.message || err);
       this.isMicActive = false;
       this.callbacks.onMicStateChange?.(false);
       this.callbacks.onError(err?.message || 'Failed to access physical microphone.', true);
@@ -143,15 +199,46 @@ export class LiveSession {
     this.callbacks.onMicStateChange?.(this.isMicActive);
 
     try {
+      const timeInfo = deviceContext.getLiveTimeInfo();
+      const locInfo = await deviceContext.detectLocation().catch(() => ({ city: '', country: '', source: 'fallback' }));
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/live`;
+      const userApiKey = apiKeyManager.getApiKey();
+      const queryParams = new URLSearchParams({
+        voice: this.currentVoice,
+        tz: timeInfo.timezone || 'Asia/Karachi',
+        city: locInfo.city || '',
+        country: locInfo.country || '',
+        time12: timeInfo.time12 || '',
+        date: timeInfo.date || '',
+        day: timeInfo.day || '',
+        ...(userApiKey ? { apiKey: userApiKey } : {}),
+      });
+
+      const wsUrl = `${protocol}//${window.location.host}/live?${queryParams.toString()}`;
 
       console.log('[LiveSession] Initiating WebSocket connection to:', wsUrl);
       this.ws = new WebSocket(wsUrl);
 
-      this.ws.onopen = () => {
+      this.ws.onopen = async () => {
         console.log('[LiveSession] WebSocket connection established successfully');
+        console.log('[LiveSession] audio listener registered');
         this.startPingKeepalive();
+
+        // Immediately transmit comprehensive local device context
+        try {
+          const fullCtx = await deviceContext.getFullContext();
+          if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(
+              JSON.stringify({
+                type: 'client_context',
+                context: fullCtx,
+              })
+            );
+            console.log('[LiveSession] Sent client device context to Aurix server');
+          }
+        } catch (ctxErr) {
+          console.warn('[LiveSession] Context transmission notice:', ctxErr);
+        }
       };
 
       this.ws.onmessage = async (event) => {
@@ -169,6 +256,7 @@ export class LiveSession {
 
       this.ws.onclose = (event) => {
         console.log('[LiveSession] WebSocket closed with code:', event.code);
+        console.log('[LiveSession] audio listener removed');
         this.stopPingKeepalive();
         this.audioStreamer.interruptPlayback();
         this.setState('disconnected');
@@ -191,6 +279,7 @@ export class LiveSession {
       case 'status':
         if (msg.status === 'ready') {
           this.setState('listening');
+          console.log(`[LiveSession] Session created with voice: ${msg.voice || this.currentVoice}`);
           console.log('[Gemini] Live session: READY');
           this.callbacks.onStatusMessage?.('Aurix is online and listening.');
         } else if (msg.status === 'connecting') {
@@ -202,12 +291,20 @@ export class LiveSession {
 
       case 'audio':
         if (msg.audio) {
+          const activeAudioVoice = msg.voice || this.currentVoice;
+          console.log(`[Audio] Output voice: ${activeAudioVoice}`);
           console.log(`[Latency] [6] First audio chunk received (${msg.audio.length} base64 chars) | Timestamp: ${Date.now()} ms`);
-          this.audioStreamer.playPcm24Chunk(msg.audio);
+          this.audioStreamer.playPcm24Chunk(msg.audio, activeAudioVoice);
           if (this.currentState !== 'speaking') {
             this.setState('speaking');
           }
         }
+        break;
+
+      case 'voice_reconfigured':
+        console.log(`[LiveSession] Session created with voice: ${msg.voice || this.currentVoice}`);
+        console.log('[LiveSession] Server acknowledged voice reconfiguration:', msg.voice);
+        this.callbacks.onStatusMessage?.(`Voice switched to ${msg.voice || this.currentVoice}`);
         break;
 
       case 'interrupted':
@@ -326,13 +423,25 @@ export class LiveSession {
       timestamp: new Date(),
     });
 
+    const clientCtx = await deviceContext.getFullContext().catch(() => null);
+
     // If WebSocket is active, send over live channel
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      if (clientCtx) {
+        this.ws.send(
+          JSON.stringify({
+            type: 'client_context',
+            context: clientCtx,
+          })
+        );
+      }
+
       this.ws.send(
         JSON.stringify({
           type: 'text',
           text,
           image: attachedImageBase64,
+          voice: this.currentVoice,
         })
       );
       return;
@@ -345,10 +454,22 @@ export class LiveSession {
     this.callbacks.onStatusMessage?.('Aurix is processing your request...');
 
     try {
+      const userKey = apiKeyManager.getApiKey();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (userKey) {
+        headers['x-gemini-api-key'] = userKey;
+      }
+
       const res = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, image: attachedImageBase64 }),
+        headers,
+        body: JSON.stringify({
+          message: text,
+          image: attachedImageBase64,
+          voice: this.currentVoice,
+          clientContext: clientCtx,
+          apiKey: userKey || undefined,
+        }),
       });
 
       if (!res.ok) {
@@ -356,7 +477,11 @@ export class LiveSession {
       }
 
       const data = await res.json();
-      if (data.actionData && data.toolName) {
+      if (data.toolExecutions && Array.isArray(data.toolExecutions)) {
+        for (const exec of data.toolExecutions) {
+          this.toolManager.handleToolExecution(exec.tool, exec.data);
+        }
+      } else if (data.actionData && data.toolName) {
         this.toolManager.handleToolExecution(data.toolName, data.actionData);
       }
 
@@ -371,7 +496,7 @@ export class LiveSession {
       }
 
       if (data.audio) {
-        this.audioStreamer.playPcm24Chunk(data.audio);
+        this.audioStreamer.playPcm24Chunk(data.audio, data.voice || this.currentVoice);
         this.setState('speaking');
       } else {
         this.setState('listening');
@@ -409,6 +534,7 @@ export class LiveSession {
     this.callbacks.onMicStateChange?.(false);
 
     if (this.ws) {
+      console.log('[LiveSession] audio listener removed');
       try {
         this.ws.close();
       } catch (e) {}

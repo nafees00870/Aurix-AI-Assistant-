@@ -146,14 +146,36 @@ async function generateAllIcons() {
 
   for (const item of sizes) {
     const outPath = path.join(publicDir, item.name);
-    await sharp(svgBuffer)
-      .resize(item.size, item.size, {
-        fit: 'contain',
-        background: { r: 0, g: 0, b: 0, alpha: 1 },
+    const isMaskable = item.name.includes('maskable');
+    
+    if (isMaskable) {
+      // Safe zone padding for maskable icons (80% scale with black background)
+      const innerSize = Math.round(item.size * 0.8);
+      const innerBuffer = await sharp(svgBuffer)
+        .resize(innerSize, innerSize, { fit: 'contain' })
+        .toBuffer();
+
+      await sharp({
+        create: {
+          width: item.size,
+          height: item.size,
+          channels: 4,
+          background: { r: 0, g: 0, b: 0, alpha: 1 },
+        },
       })
-      .png({ quality: 100, compressionLevel: 9 })
-      .toFile(outPath);
-    console.log(`Created: ${item.name} (${item.size}x${item.size})`);
+        .composite([{ input: innerBuffer, gravity: 'center' }])
+        .png({ palette: false, quality: 100, compressionLevel: 9 })
+        .toFile(outPath);
+    } else {
+      await sharp(svgBuffer)
+        .resize(item.size, item.size, {
+          fit: 'contain',
+          background: { r: 0, g: 0, b: 0, alpha: 1 },
+        })
+        .png({ palette: false, quality: 100, compressionLevel: 9 })
+        .toFile(outPath);
+    }
+    console.log(`Created: ${item.name} (${item.size}x${item.size}) [Truecolor RGBA]`);
   }
 
   // 3. Create favicon.ico using 32x32 PNG buffer

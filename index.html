@@ -1,6 +1,22 @@
 <!doctype html>
 <html lang="en" class="dark">
   <head>
+    <script>
+      // Suppress harmless browser extension injection errors (e.g., MetaMask 'ethereum', 'fetch')
+      // from surfacing in the AI Studio preview console.
+      window.addEventListener('error', function(e) {
+        if (e.message && (e.message.includes('ethereum') || e.message.includes('fetch of #<Window>'))) {
+          e.preventDefault();
+          e.stopPropagation();
+          return true;
+        }
+      }, true);
+      window.addEventListener('unhandledrejection', function(e) {
+        if (e.reason && e.reason.message && (e.reason.message.includes('ethereum') || e.reason.message.includes('fetch of #<Window>'))) {
+          e.preventDefault();
+        }
+      }, true);
+    </script>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>Aurix AI • Voice-to-Voice Assistant by Nafees Kiani</title>

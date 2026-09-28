@@ -12,11 +12,19 @@ import {
   TranscriptItem,
   THEMES,
   FeedbackRating,
+  AurixVoiceKey,
+  AURIX_VOICE_STORAGE_KEY,
 } from './modules/AurixState';
 import { Aurix3DCore } from './components/Aurix3DCore';
 import { TranscriptDrawer } from './components/TranscriptDrawer';
 import { FeedbackModal } from './components/FeedbackModal';
+import { VoiceSelector } from './components/VoiceSelector';
+import { ToolActionCard } from './components/ToolActionCard';
 import { feedbackService } from './modules/FeedbackService';
+import { deviceContext } from './modules/DeviceContext';
+import { ToolActionItem } from './modules/AurixState';
+import { ApiKeyModal } from './components/ApiKeyModal';
+import { apiKeyManager } from './modules/ApiKeyManager';
 import {
   Mic,
   ArrowUp,
@@ -27,6 +35,9 @@ import {
   ThumbsUp,
   ThumbsDown,
   Check,
+  Clock,
+  MapPin,
+  Key,
 } from 'lucide-react';
 
 export default function App() {
@@ -37,10 +48,91 @@ export default function App() {
   const [transcripts, setTranscripts] = useState<TranscriptItem[]>([]);
   const [isTranscriptOpen, setIsTranscriptOpen] = useState(false);
   const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
+  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
+  const [hasApiKey, setHasApiKey] = useState(() => apiKeyManager.hasApiKey());
   const [latestAurixTurn, setLatestAurixTurn] = useState<TranscriptItem | null>(null);
   const [recentRatedTurnId, setRecentRatedTurnId] = useState<string | null>(null);
   const [quickRatedRating, setQuickRatedRating] = useState<FeedbackRating | null>(null);
   const [showQuickFeedbackPrompt, setShowQuickFeedbackPrompt] = useState(false);
+  const [micNotice, setMicNotice] = useState<string | null>(null);
+  const [currentAction, setCurrentAction] = useState<ToolActionItem | null>(null);
+
+  // Live Device Time & Location for Header HUD
+  const [deviceClock, setDeviceClock] = useState(() => {
+    const info = deviceContext.getLiveTimeInfo();
+    return {
+      time: info.time12.replace(/:\d{2}\s/, ' '), // e.g. "9:36 PM"
+      timezone: info.timezone.split('/').pop()?.replace('_', ' ') || info.timezone,
+      city: '',
+    };
+  });
+
+  useEffect(() => {
+    // Detect city asynchronously
+    deviceContext.detectLocation().then((loc) => {
+      if (loc.city) {
+        setDeviceClock((prev) => ({ ...prev, city: loc.city || '' }));
+      }
+    }).catch(() => {});
+
+    // Update clock every second
+    const interval = setInterval(() => {
+      const info = deviceContext.getLiveTimeInfo();
+      setDeviceClock((prev) => ({
+        ...prev,
+        time: info.time12.replace(/:\d{2}\s/, ' '),
+      }));
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  // Auto-dismiss current action HUD after 5.5 seconds
+  useEffect(() => {
+    if (!currentAction) return;
+    const timer = setTimeout(() => {
+      setCurrentAction(null);
+    }, 5500);
+    return () => clearTimeout(timer);
+  }, [currentAction]);
+
+  // Prompt user to connect Gemini API Key on first launch if not configured
+  useEffect(() => {
+    if (!apiKeyManager.hasApiKey()) {
+      const timer = setTimeout(() => {
+        setIsApiKeyModalOpen(true);
+      }, 700);
+      return () => clearTimeout(timer);
+    }
+  }, []);
+
+  const handleKeyConfigured = async (newKey: string) => {
+    const valid = Boolean(newKey.trim());
+    setHasApiKey(valid);
+    if (valid) {
+      setMicNotice(null);
+      if (state === 'disconnected') {
+        try {
+          await liveSessionRef.current?.connect(false);
+        } catch (err) {
+          console.warn('[Aurix] Reconnect notice after key entry:', err);
+        }
+      }
+    }
+  };
+
+  // Spoken Voice State with localStorage Persistence (Single Source of Truth)
+  const [voice, setVoice] = useState<AurixVoiceKey>(() => {
+    try {
+      const saved =
+        localStorage.getItem(AURIX_VOICE_STORAGE_KEY) || localStorage.getItem('aurix_voice');
+      if (saved === 'male' || saved === 'female' || saved === 'baby') {
+        return saved;
+      }
+    } catch (e) {}
+    return 'male';
+  });
+  const [previewingVoice, setPreviewingVoice] = useState<AurixVoiceKey | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -53,6 +145,7 @@ export default function App() {
     const toolManager = new ToolExecutionManager({
       onThemeChange: (_newTheme: VisualizerThemeKey) => {},
       onToolExecuted: (action) => {
+        setCurrentAction(action);
         if (action.tool === 'openWebsite' && action.data?.url) {
           try {
             window.open(action.data.url, '_blank', 'noopener,noreferrer');
@@ -66,37 +159,45 @@ export default function App() {
 
     toolManagerRef.current = toolManager;
 
-    const session = new LiveSession(toolManager, {
-      onStateChange: (newState) => {
-        setState(newState);
-      },
-      onLatencyUpdate: () => {},
-      onTranscriptReceived: (item) => {
-        setTranscripts((prev) => {
-          const idx = prev.findIndex((t) => t.id === item.id);
-          if (idx !== -1) {
-            const updated = [...prev];
-            updated[idx] = item;
-            return updated;
-          }
-          return [...prev, item];
-        });
+    const session = new LiveSession(
+      toolManager,
+      {
+        onStateChange: (newState) => {
+          setState(newState);
+        },
+        onLatencyUpdate: () => {},
+        onTranscriptReceived: (item) => {
+          setTranscripts((prev) => {
+            const idx = prev.findIndex((t) => t.id === item.id);
+            if (idx !== -1) {
+              const updated = [...prev];
+              updated[idx] = item;
+              return updated;
+            }
+            return [...prev, item];
+          });
 
-        if (item.sender === 'aurix' && item.text?.trim()) {
-          setLatestAurixTurn(item);
-          setShowQuickFeedbackPrompt(true);
-        }
+          if (item.sender === 'aurix' && item.text?.trim()) {
+            setLatestAurixTurn(item);
+            setShowQuickFeedbackPrompt(true);
+          }
+        },
+        onMicStateChange: (active) => {
+          setIsMicActive(active);
+        },
+        onError: (errMsg, isMicError) => {
+          console.warn('[Aurix Error]', errMsg);
+          if (isMicError) {
+            setMicNotice(errMsg);
+          }
+        },
+        onStatusMessage: (msg) => {
+          console.log('[Aurix Status]', msg);
+        },
       },
-      onMicStateChange: (active) => {
-        setIsMicActive(active);
-      },
-      onError: (errMsg) => {
-        console.warn('[Aurix Error]', errMsg);
-      },
-      onStatusMessage: (msg) => {
-        console.log('[Aurix Status]', msg);
-      },
-    });
+      undefined,
+      voice
+    );
 
     liveSessionRef.current = session;
 
@@ -105,17 +206,55 @@ export default function App() {
     };
   }, []);
 
+  const handleVoiceChange = (newVoice: AurixVoiceKey) => {
+    console.log(`[Voice] Selected: ${newVoice}`);
+    setVoice(newVoice);
+    try {
+      localStorage.setItem(AURIX_VOICE_STORAGE_KEY, newVoice);
+      localStorage.setItem('aurix_voice', newVoice);
+    } catch (e) {}
+    if (liveSessionRef.current) {
+      liveSessionRef.current.setVoice(newVoice);
+    }
+  };
+
+  const handlePreviewVoice = async (voiceKey: AurixVoiceKey) => {
+    if (previewingVoice === voiceKey) {
+      setPreviewingVoice(null);
+      liveSessionRef.current?.getAudioStreamer().interruptPlayback();
+      return;
+    }
+    setPreviewingVoice(voiceKey);
+    try {
+      if (liveSessionRef.current) {
+        await liveSessionRef.current.playVoicePreview(voiceKey);
+      }
+    } finally {
+      setTimeout(() => {
+        setPreviewingVoice((current) => (current === voiceKey ? null : current));
+      }, 3500);
+    }
+  };
+
   const handleToggleMic = async () => {
     if (!liveSessionRef.current) return;
 
+    // Check if API key is configured
+    if (!apiKeyManager.hasApiKey()) {
+      setIsApiKeyModalOpen(true);
+      setMicNotice('Please connect your Gemini API Key first');
+      return;
+    }
+
     // Immediately unlock audio context on direct user gesture
     liveSessionRef.current.getAudioStreamer().initPlaybackContext();
+    setMicNotice(null);
 
     if (state === 'disconnected') {
       try {
         const res = await liveSessionRef.current.connect(true);
         setIsMicActive(res.micActive);
-      } catch (err) {
+      } catch (err: any) {
         try {
           await liveSessionRef.current.connect(false);
         } catch (e) {
@@ -129,7 +268,9 @@ export default function App() {
       } else {
         const success = await liveSessionRef.current.enableMicrophone();
         setIsMicActive(success);
-        setState('listening');
+        if (success) {
+          setState('listening');
+        }
       }
     }
   };
@@ -138,6 +279,12 @@ export default function App() {
     if (e) e.preventDefault();
     const query = inputValue.trim();
     if (!query && !attachedImage) return;
+
+    if (!apiKeyManager.hasApiKey()) {
+      setIsApiKeyModalOpen(true);
+      return;
+    }
+
     if (!liveSessionRef.current) return;
 
     // Unlock audio context on user gesture
@@ -230,36 +377,86 @@ export default function App() {
       />
 
       {/* 1. Header Typography & HUD Quick Actions */}
-      <header className="w-full max-w-2xl pt-1 sm:pt-2 z-20 flex items-center justify-between px-2">
-        {/* Left: Feedback & Quality Insights */}
-        <button
-          onClick={() => setIsFeedbackModalOpen(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/[0.04] hover:bg-cyan-950/40 border border-white/10 hover:border-cyan-500/30 text-white/60 hover:text-cyan-300 transition-all text-xs font-mono backdrop-blur-md cursor-pointer shadow-[0_0_15px_rgba(0,0,0,0.4)]"
-          title="View Conversation Feedback & Insights"
-        >
-          <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
-          <span className="hidden xs:inline text-[11px]">Insights</span>
-        </button>
+      <header className="w-full max-w-2xl pt-1 sm:pt-2 z-30 flex flex-col items-center gap-1.5 px-2">
+        <div className="w-full flex items-center justify-between">
+          {/* Top-Left: Voice Selector & Insights */}
+          <div className="flex items-center gap-2">
+            <VoiceSelector
+              currentVoice={voice}
+              onVoiceChange={handleVoiceChange}
+              onPreviewVoice={handlePreviewVoice}
+              previewingVoice={previewingVoice}
+            />
 
-        {/* Center: Title */}
-        <h1 className="text-xs sm:text-sm font-mono tracking-[0.45em] text-cyan-100/70 uppercase font-light drop-shadow-[0_0_15px_rgba(34,211,238,0.35)] flex items-center gap-2">
-          AURIX
-        </h1>
+            <button
+              onClick={() => setIsFeedbackModalOpen(true)}
+              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/[0.04] hover:bg-cyan-950/40 border border-white/10 hover:border-cyan-500/30 text-white/60 hover:text-cyan-300 transition-all text-xs font-mono backdrop-blur-md cursor-pointer shadow-[0_0_15px_rgba(0,0,0,0.4)]"
+              title="View Conversation Feedback & Insights"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+              <span className="text-[11px]">Insights</span>
+            </button>
+          </div>
 
-        {/* Right: Transcript Drawer Button */}
-        <button
-          onClick={() => setIsTranscriptOpen(true)}
-          className="relative flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/[0.04] hover:bg-cyan-950/40 border border-white/10 hover:border-cyan-500/30 text-white/60 hover:text-cyan-300 transition-all text-xs font-mono backdrop-blur-md cursor-pointer shadow-[0_0_15px_rgba(0,0,0,0.4)]"
-          title="Open Live Voice Transcripts & Feedback"
-        >
-          <MessageSquare className="w-3.5 h-3.5 text-cyan-400" />
-          <span className="hidden xs:inline text-[11px]">Logs</span>
-          {transcripts.length > 0 && (
-            <span className="px-1.5 py-0.2 rounded-full bg-cyan-500 text-black text-[9px] font-bold">
-              {transcripts.length > 99 ? '99+' : transcripts.length}
-            </span>
-          )}
-        </button>
+          {/* Center: Title */}
+          <h1 className="text-xs sm:text-sm font-mono tracking-[0.45em] text-cyan-100/70 uppercase font-light drop-shadow-[0_0_15px_rgba(34,211,238,0.35)] flex items-center gap-2">
+            AURIX
+          </h1>
+
+          {/* Right: API Key, Install App, Transcript Drawer & Insights */}
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            {/* Direct API Key Setup Button */}
+            <button
+              onClick={() => setIsApiKeyModalOpen(true)}
+              className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-full border text-xs font-mono backdrop-blur-md cursor-pointer transition-all shadow-[0_0_15px_rgba(0,0,0,0.4)] ${
+                hasApiKey
+                  ? 'bg-white/[0.04] hover:bg-cyan-950/40 border-white/10 hover:border-cyan-500/30 text-white/70 hover:text-cyan-300'
+                  : 'bg-cyan-500/20 hover:bg-cyan-500/30 border-cyan-400 text-cyan-200 animate-pulse shadow-[0_0_15px_rgba(6,182,212,0.35)]'
+              }`}
+              title={hasApiKey ? 'Gemini API Key Connected (Click to change)' : 'Connect Gemini API Key'}
+            >
+              <Key className="w-3.5 h-3.5 text-cyan-400" />
+              <span className="hidden xs:inline text-[11px] font-semibold">
+                {hasApiKey ? 'API Key' : 'Connect Key'}
+              </span>
+            </button>
+
+            <button
+              onClick={() => setIsFeedbackModalOpen(true)}
+              className="sm:hidden flex items-center justify-center p-1.5 rounded-full bg-white/[0.04] hover:bg-cyan-950/40 border border-white/10 hover:border-cyan-500/30 text-white/60 hover:text-cyan-300 transition-all text-xs font-mono backdrop-blur-md cursor-pointer shadow-[0_0_15px_rgba(0,0,0,0.4)]"
+              title="View Conversation Feedback & Insights"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+            </button>
+
+            <button
+              onClick={() => setIsTranscriptOpen(true)}
+              className="relative flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/[0.04] hover:bg-cyan-950/40 border border-white/10 hover:border-cyan-500/30 text-white/60 hover:text-cyan-300 transition-all text-xs font-mono backdrop-blur-md cursor-pointer shadow-[0_0_15px_rgba(0,0,0,0.4)]"
+              title="Open Live Voice Transcripts & Feedback"
+            >
+              <MessageSquare className="w-3.5 h-3.5 text-cyan-400" />
+              <span className="hidden xs:inline text-[11px]">Logs</span>
+              {transcripts.length > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full bg-cyan-500 text-black text-[9px] font-bold">
+                  {transcripts.length > 99 ? '99+' : transcripts.length}
+                </span>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* Live Device Clock & Location Sync Pill */}
+        <div className="flex items-center gap-2.5 px-3 py-0.5 rounded-full bg-black/40 border border-cyan-500/20 text-[10px] font-mono text-cyan-300/80 backdrop-blur-md">
+          <div className="flex items-center gap-1 text-amber-300/90">
+            <Clock className="w-3 h-3 text-amber-400" />
+            <span>{deviceClock.time}</span>
+          </div>
+          <span className="text-white/20">•</span>
+          <div className="flex items-center gap-1 text-white/60 truncate max-w-[140px]">
+            <MapPin className="w-3 h-3 text-cyan-400 shrink-0" />
+            <span className="truncate">{deviceClock.city || deviceClock.timezone}</span>
+          </div>
+        </div>
       </header>
 
       {/* Hidden File Input for Device Image Upload */}
@@ -336,6 +533,32 @@ export default function App() {
                 title="Dismiss"
               >
                 <X className="w-3 h-3" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Microphone Notice / Browser Permission Guidance Banner */}
+        {micNotice && (
+          <div className="w-full flex items-center justify-between gap-2 px-3.5 py-2 rounded-2xl bg-amber-950/70 backdrop-blur-xl border border-amber-500/40 text-amber-200 text-xs shadow-[0_0_20px_rgba(245,158,11,0.15)] animate-fade-in font-sans">
+            <span className="text-[11px] leading-relaxed flex-1">
+              🎙️ {micNotice}
+            </span>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={handleToggleMic}
+                className="px-2 py-0.5 rounded-full bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-[10px] font-mono cursor-pointer transition-colors"
+              >
+                Retry
+              </button>
+              <button
+                type="button"
+                onClick={() => setMicNotice(null)}
+                className="p-1 rounded-full text-amber-300/60 hover:text-amber-200 cursor-pointer transition-colors"
+                title="Dismiss"
+              >
+                <X className="w-3.5 h-3.5" />
               </button>
             </div>
           </div>
@@ -446,6 +669,21 @@ export default function App() {
         isOpen={isFeedbackModalOpen}
         onClose={() => setIsFeedbackModalOpen(false)}
         theme={THEMES.cyan}
+      />
+
+      {/* Floating HUD Tool Execution Card */}
+      <ToolActionCard
+        action={currentAction}
+        theme={THEMES.cyan}
+        onDismiss={() => setCurrentAction(null)}
+      />
+
+      {/* Gemini API Key Direct Setup Modal */}
+      <ApiKeyModal
+        isOpen={isApiKeyModalOpen}
+        onClose={() => setIsApiKeyModalOpen(false)}
+        onKeyConfigured={handleKeyConfigured}
+        isMandatoryInitialPrompt={!hasApiKey}
       />
     </div>
   );

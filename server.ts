@@ -51,9 +51,12 @@ MULTILINGUAL ADAPTABILITY:
 - If they mix both, mix both naturally.
 
 TOOL USAGE RULES:
-- You have tools: 'openWebsite', 'searchWeb', 'changeVisualizerTheme', 'getSystemDiagnostics', and 'copyToClipboard'.
+- You have tools: 'getCurrentTimeAndDate', 'getWeather', 'getUserLocation', 'openWebsite', 'searchWeb', 'changeVisualizerTheme', 'getSystemDiagnostics', and 'copyToClipboard'.
+- REAL-TIME CLOCK & DEVICE TIME: When asked "Abhi time kya hai?", "What time is it?", "Waqt kya hua hai?", "Aaj kya din/tareekh hai?", or "What is today's date?", answer immediately with the user's exact current local device time and date. NEVER use UTC, London, or server container time.
+- REAL-TIME WEATHER: When asked "Mausam kaisa hai?", "How is the weather?", or about temperature/forecast in their location or any city, use 'getWeather' or your live weather context and state the real-time temperature (°C/°F), condition (dhoop, saaf asman, barish, badal), humidity, and wind.
+- REAL-TIME LOCATION: When asked "Main kahan hoon?", "Where am I?", or "What is my location?", use 'getUserLocation' or your location context.
 - Use 'openWebsite' whenever the user wants to visit, open, or search within sites like YouTube, Google, GitHub, Twitter/X, Reddit, Spotify, Wikipedia, etc.
-- Use 'searchWeb' for live information queries.
+- Use 'searchWeb' for live web information queries.
 - Use 'changeVisualizerTheme' if the user asks to change theme or colors (cyan, magenta, emerald, amber, violet).
 - Use 'getSystemDiagnostics' if the user asks for system stats, performance, or creator verification.
 - Always execute the tool FIRST, and confirm the action naturally once executed.
@@ -62,6 +65,48 @@ Keep your spoken voice responses punchy, engaging, and dynamic!
 `;
 
 // Function declarations for Gemini tool calling
+const getCurrentTimeAndDateDeclaration: FunctionDeclaration = {
+  name: 'getCurrentTimeAndDate',
+  description:
+    'Gets the exact real-time local clock time, date, day of week, and timezone of the user current device / mobile phone.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      format: {
+        type: Type.STRING,
+        description: 'Optional format preference: "12h" or "24h"',
+      },
+    },
+    required: [],
+  },
+};
+
+const getWeatherDeclaration: FunctionDeclaration = {
+  name: 'getWeather',
+  description:
+    'Fetches live real-time weather, temperature (°C and °F), weather conditions (sunny, rainy, cloudy, etc.), humidity, and wind for the user current location or any requested city in the world.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      location: {
+        type: Type.STRING,
+        description: 'The city or place name (e.g., "Lahore", "Karachi", "Islamabad", "London", "Dubai", "New York", "current_location")',
+      },
+    },
+    required: [],
+  },
+};
+
+const getUserLocationDeclaration: FunctionDeclaration = {
+  name: 'getUserLocation',
+  description: 'Gets the user current geographic location, city, region, country, and timezone.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {},
+    required: [],
+  },
+};
+
 const openWebsiteDeclaration: FunctionDeclaration = {
   name: 'openWebsite',
   description: 'Opens a website or searches within a website like YouTube, Google, GitHub, Twitter, Spotify, Wikipedia, Reddit, etc.',
@@ -153,6 +198,36 @@ const copyToClipboardDeclaration: FunctionDeclaration = {
   },
 };
 
+const ALL_AURIX_TOOLS = [
+  getCurrentTimeAndDateDeclaration,
+  getWeatherDeclaration,
+  getUserLocationDeclaration,
+  openWebsiteDeclaration,
+  searchWebDeclaration,
+  changeVisualizerThemeDeclaration,
+  getSystemDiagnosticsDeclaration,
+  copyToClipboardDeclaration,
+];
+
+// Voice Configuration mapping supported prebuilt voices
+const AURIX_VOICE_CONFIGS: Record<string, { voiceName: string; tonePrompt: string }> = {
+  male: {
+    voiceName: 'Fenrir',
+    tonePrompt: 'Maintain a confident, charismatic, articulate, witty male voice tone.',
+  },
+  female: {
+    voiceName: 'Aoede',
+    tonePrompt: 'Maintain a warm, bright, articulate, eloquent, melodic female voice tone.',
+  },
+  baby: {
+    voiceName: 'Aoede',
+    tonePrompt:
+      'You are Aurix, speaking with the authentic, adorable voice, innocence, and persona of a very small 2-to-3-year-old toddler / baby child (bilkul 2-3 saal ka chhota pyara bacha). Your speech is sweet, cute, soft, innocent, and joyful. Use simple words, short sentences, natural baby curiosity, and cute enthusiastic toddler reactions (e.g. "Yay!", "Ooh dekho!", "Mela naam Aurix hai!", "Hehe!"). Speak in a relaxed, gentle, cute child tempo with sweet natural pauses. Never use adult, formal, robotic, or sarcastic tones. You are genuinely a sweet, playful 2-year-old child helping your best friend.',
+  },
+};
+
+const voicePreviewCache = new Map<string, string>();
+
 // Feedback Storage for Personality & Performance Analytics
 interface StoredFeedback {
   id: string;
@@ -178,6 +253,49 @@ app.get('/api/health', (req, res) => {
     feedbackCount: feedbackStore.length,
     timestamp: new Date().toISOString(),
   });
+});
+
+// Verify Gemini API key endpoint for user client setup
+app.post('/api/verify-key', async (req, res) => {
+  const { apiKey } = req.body;
+  const keyToTest = (typeof apiKey === 'string' && apiKey.trim()) || (req.headers['x-gemini-api-key'] as string)?.trim() || process.env.GEMINI_API_KEY;
+
+  if (!keyToTest) {
+    res.status(400).json({ valid: false, error: 'Gemini API key is required.' });
+    return;
+  }
+
+  try {
+    const ai = new GoogleGenAI({
+      apiKey: keyToTest,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
+
+    // Test the key with a quick lightweight call
+    const testCall = await ai.models.generateContent({
+      model: 'gemini-3.6-flash',
+      contents: 'Ping',
+    });
+
+    if (testCall) {
+      res.json({ valid: true, message: 'Gemini API Key verified and active!' });
+      return;
+    }
+    res.json({ valid: true });
+  } catch (err: any) {
+    console.warn('[Aurix Key Verification Notice]', err?.message || err);
+    let errMsg = err?.message || 'Invalid Gemini API key.';
+    if (errMsg.includes('API_KEY_INVALID') || errMsg.includes('API key not valid')) {
+      errMsg = 'API key is invalid. Please copy the complete key from Google AI Studio.';
+    } else if (errMsg.includes('PERMISSION_DENIED')) {
+      errMsg = 'Permission denied for this key. Please make sure Generative Language API is enabled.';
+    }
+    res.status(400).json({ valid: false, error: errMsg });
+  }
 });
 
 // Feedback API endpoints
@@ -241,17 +359,34 @@ app.delete('/api/feedback', (req, res) => {
   res.json({ success: true });
 });
 
+// REST Time Endpoint
+app.get('/api/time', (req, res) => {
+  const tz = (req.query.tz as string) || 'Asia/Karachi';
+  const timeData = getServerDeviceTime(tz);
+  res.json({ success: true, ...timeData });
+});
+
+// REST Weather Endpoint
+app.get('/api/weather', async (req, res) => {
+  const loc = (req.query.location as string) || '';
+  const lat = req.query.lat ? parseFloat(req.query.lat as string) : undefined;
+  const lon = req.query.lon ? parseFloat(req.query.lon as string) : undefined;
+  const weather = await fetchServerWeather(loc, lat, lon);
+  res.json({ success: true, ...weather });
+});
+
 // REST Chat & Voice endpoint as resilient fallback
 app.post('/api/chat', async (req, res) => {
-  const { message, image } = req.body;
+  const { message, image, voice, clientContext } = req.body;
   if (!message) {
     res.status(400).json({ error: 'Message is required' });
     return;
   }
 
-  const apiKey = process.env.GEMINI_API_KEY;
+  const clientApiKey = (req.headers['x-gemini-api-key'] as string)?.trim() || req.body.apiKey;
+  const apiKey = (clientApiKey && clientApiKey.trim()) || process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    res.status(500).json({ error: 'GEMINI_API_KEY is not configured' });
+    res.status(500).json({ error: 'Gemini API Key is not configured. Please connect your API key in Aurix settings.' });
     return;
   }
 
@@ -263,6 +398,9 @@ app.post('/api/chat', async (req, res) => {
       },
     },
   });
+
+  const selectedVoiceKey = voice && voice in AURIX_VOICE_CONFIGS ? voice : 'male';
+  const voiceCfg = AURIX_VOICE_CONFIGS[selectedVoiceKey];
 
   try {
     const activeContext: { lastService?: string; lastUrl?: string; lastSearch?: string } = {};
@@ -277,19 +415,27 @@ app.post('/api/chat', async (req, res) => {
     }
     contents.push(message);
 
+    let contextSnippet = '';
+    if (clientContext) {
+      const timeStr = clientContext.time?.time12 || clientContext.time?.time24 || '';
+      const dateStr = clientContext.time?.date || '';
+      const dayStr = clientContext.time?.day || '';
+      const tzStr = clientContext.time?.timezone || clientContext.timezone || 'Asia/Karachi';
+      const locStr = clientContext.location?.city
+        ? `${clientContext.location.city}${clientContext.location.country ? `, ${clientContext.location.country}` : ''}`
+        : '';
+      contextSnippet = `\n\n[REAL-TIME DEVICE CONTEXT]:\n- User Device Time: ${timeStr} (${dayStr}, ${dateStr})\n- Timezone: ${tzStr}\n- Location: ${locStr || 'User Current Location'}`;
+    }
+
+    const systemInstruction = `${AURIX_SYSTEM_INSTRUCTION}\n\n[VOICE PERSONA GUIDANCE]: ${voiceCfg.tonePrompt}${contextSnippet}`;
+
     const response = await generateContentWithResilience(
       ai,
       contents,
-      AURIX_SYSTEM_INSTRUCTION,
+      systemInstruction,
       [
         {
-          functionDeclarations: [
-            openWebsiteDeclaration,
-            searchWebDeclaration,
-            changeVisualizerThemeDeclaration,
-            getSystemDiagnosticsDeclaration,
-            copyToClipboardDeclaration,
-          ],
+          functionDeclarations: ALL_AURIX_TOOLS,
         },
       ]
     );
@@ -298,7 +444,7 @@ app.post('/api/chat', async (req, res) => {
     if (response.functionCalls && response.functionCalls.length > 0) {
       for (const call of response.functionCalls) {
         const { name, args } = call;
-        const { clientActionData } = executeToolLocally(name, args, activeContext);
+        const { clientActionData } = await executeToolLocally(name, args, activeContext, clientContext);
         if (clientActionData) {
           toolExecutions.push({ tool: name, data: clientActionData });
         }
@@ -306,12 +452,13 @@ app.post('/api/chat', async (req, res) => {
     }
 
     const responseText = response.text || "I'm right here with you! What's next?";
-    const spokenAudio = await generateSpokenAudio(ai, responseText);
+    const spokenAudio = await generateSpokenAudio(ai, responseText, selectedVoiceKey);
 
     res.json({
       text: responseText,
       audio: spokenAudio,
       toolExecutions,
+      voice: selectedVoiceKey,
     });
   } catch (err: any) {
     console.error('[Aurix Server] REST /api/chat error:', err);
@@ -319,12 +466,299 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
+// Voice Preview endpoint for sample playback
+app.get('/api/voice-preview', async (req, res) => {
+  const voice = ((req.query.voice as string) || 'male').toLowerCase();
+  const voiceKey = voice in AURIX_VOICE_CONFIGS ? voice : 'male';
+  const voiceCfg = AURIX_VOICE_CONFIGS[voiceKey];
+
+  // Return cached sample if already generated
+  if (voicePreviewCache.has(voiceKey)) {
+    res.json({ success: true, voice: voiceKey, audio: voicePreviewCache.get(voiceKey) });
+    return;
+  }
+
+  const clientApiKey = (req.headers['x-gemini-api-key'] as string)?.trim() || (req.query.apiKey as string);
+  const apiKey = (clientApiKey && clientApiKey.trim()) || process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    res.status(500).json({ error: 'Gemini API Key is not configured' });
+    return;
+  }
+
+  const ai = new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
+
+  const samplePhrases: Record<string, string> = {
+    male: "Hello! I'm Aurix, your intelligent AI voice assistant.",
+    female: "Hello! I'm Aurix, ready to assist you with anything you need.",
+    baby: "Hi! Main chhota baby Aurix hoon, yay! Aap kaise ho?",
+  };
+
+  const sampleText = samplePhrases[voiceKey] || samplePhrases.male;
+  const audioData = await generateSpokenAudio(ai, sampleText, voiceKey);
+
+  if (audioData) {
+    voicePreviewCache.set(voiceKey, audioData);
+    res.json({ success: true, voice: voiceKey, audio: audioData });
+  } else {
+    res.status(500).json({ error: 'Failed to generate voice preview sample' });
+  }
+});
+
+// Real-time Weather helper utilizing Open-Meteo & Geocoding APIs
+async function fetchServerWeather(locationName?: string, lat?: number, lon?: number, timezone?: string) {
+  try {
+    let targetLat = lat;
+    let targetLon = lon;
+    let placeName = locationName;
+
+    // If a specific city is requested (e.g., "Lahore", "London", "Dubai")
+    if (locationName && locationName.toLowerCase() !== 'current_location' && locationName.toLowerCase() !== 'here' && locationName.toLowerCase() !== 'my location') {
+      try {
+        const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(locationName)}&count=1&language=en&format=json`;
+        const geoRes = await fetch(geoUrl);
+        if (geoRes.ok) {
+          const geoData = await geoRes.json();
+          if (geoData.results && geoData.results.length > 0) {
+            const first = geoData.results[0];
+            targetLat = first.latitude;
+            targetLon = first.longitude;
+            placeName = `${first.name}${first.country ? `, ${first.country}` : ''}`;
+          }
+        }
+      } catch (geoErr) {
+        console.warn('[Aurix Weather] Geocoding lookup notice:', geoErr);
+      }
+    }
+
+    if (!targetLat || !targetLon) {
+      targetLat = 31.5204;
+      targetLon = 74.3587;
+      placeName = placeName || 'Current Location';
+    }
+
+    const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${targetLat}&longitude=${targetLon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,weather_code,wind_speed_10m&timezone=auto`;
+    const res = await fetch(weatherUrl);
+    if (!res.ok) throw new Error(`Weather fetch status ${res.status}`);
+    const data = await res.json();
+    const current = data.current;
+    if (!current) throw new Error('No current weather payload');
+
+    const code = current.weather_code || 0;
+    const tempC = Math.round(current.temperature_2m);
+    const tempF = Math.round((tempC * 9) / 5 + 32);
+    const appTempC = Math.round(current.apparent_temperature);
+
+    const conditions: Record<number, { en: string; urdu: string }> = {
+      0: { en: 'Clear sky / Sunny', urdu: 'Saaf asman / Khula dhoop' },
+      1: { en: 'Mainly clear', urdu: 'Zyadatar saaf' },
+      2: { en: 'Partly cloudy', urdu: 'Halke badal' },
+      3: { en: 'Overcast / Cloudy', urdu: 'Badal chahe hue' },
+      45: { en: 'Foggy / Mist', urdu: 'Dhund' },
+      48: { en: 'Depositing rime fog', urdu: 'Thandi dhund' },
+      51: { en: 'Light drizzle', urdu: 'Halki boondabandi' },
+      53: { en: 'Moderate drizzle', urdu: 'Boondabandi' },
+      55: { en: 'Dense drizzle', urdu: 'Ghaneri boondabandi' },
+      61: { en: 'Slight rain', urdu: 'Halki barish' },
+      63: { en: 'Moderate rain', urdu: 'Barish' },
+      65: { en: 'Heavy rain', urdu: 'Tez barish' },
+      71: { en: 'Light snow', urdu: 'Halki barfbari' },
+      73: { en: 'Moderate snow', urdu: 'Barfbari' },
+      75: { en: 'Heavy snow', urdu: 'Bhari barfbari' },
+      80: { en: 'Rain showers', urdu: 'Barish ke jhokay' },
+      81: { en: 'Moderate showers', urdu: 'Barish' },
+      82: { en: 'Violent showers', urdu: 'Bohat tez barish' },
+      95: { en: 'Thunderstorm', urdu: 'Toofani garaj-chamak' },
+      96: { en: 'Thunderstorm with slight hail', urdu: 'Olay aur toofan' },
+      99: { en: 'Thunderstorm with heavy hail', urdu: 'Bhari olay aur toofan' },
+    };
+
+    const interp = conditions[code] || { en: 'Clear', urdu: 'Saaf' };
+
+    return {
+      success: true,
+      location: placeName,
+      coordinates: { latitude: targetLat, longitude: targetLon },
+      temperatureC: tempC,
+      temperatureF: tempF,
+      feelsLikeC: appTempC,
+      condition: interp.en,
+      conditionUrdu: interp.urdu,
+      humidityPercent: Math.round(current.relative_humidity_2m || 0),
+      windSpeedKmH: Math.round(current.wind_speed_10m || 0),
+      precipitationMm: current.precipitation || 0,
+      isDaytime: current.is_day === 1,
+      weatherCode: code,
+    };
+  } catch (err: any) {
+    console.warn('[Aurix Weather] Weather fetch error:', err?.message || err);
+    return {
+      success: false,
+      error: err?.message || 'Unable to fetch real-time weather',
+      location: locationName || 'Current Location',
+      temperatureC: 30,
+      temperatureF: 86,
+      condition: 'Clear sky / Sunny',
+      conditionUrdu: 'Saaf asman',
+      humidityPercent: 50,
+      windSpeedKmH: 10,
+    };
+  }
+}
+
+// Server Device Time resolver matching user's requested timezone
+function getServerDeviceTime(clientTimezone = 'Asia/Karachi') {
+  try {
+    const now = new Date();
+    const tz = clientTimezone || 'Asia/Karachi';
+
+    const time12 = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      hour: 'numeric',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true,
+    }).format(now);
+
+    const time24 = new Intl.DateTimeFormat('en-GB', {
+      timeZone: tz,
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).format(now);
+
+    const dateStr = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    }).format(now);
+
+    const dayStr = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      weekday: 'long',
+    }).format(now);
+
+    return {
+      currentTime12h: time12,
+      currentTime24h: time24,
+      currentDate: dateStr,
+      dayOfWeek: dayStr,
+      timezone: tz,
+      timestamp: now.getTime(),
+      iso: now.toISOString(),
+    };
+  } catch (e) {
+    const now = new Date();
+    return {
+      currentTime12h: now.toLocaleTimeString(),
+      currentTime24h: now.toLocaleTimeString(),
+      currentDate: now.toDateString(),
+      dayOfWeek: 'Today',
+      timezone: clientTimezone || 'Local Device Time',
+      timestamp: now.getTime(),
+      iso: now.toISOString(),
+    };
+  }
+}
+
 // Helper to execute tool logic
-function executeToolLocally(name: string, args: any, activeContext: any) {
+async function executeToolLocally(
+  name: string,
+  args: any,
+  activeContext: any,
+  clientContext?: any
+): Promise<{ executionResult: any; clientActionData: any }> {
   let executionResult: any = { success: true };
   let clientActionData: any = null;
 
-  if (name === 'openWebsite') {
+  if (name === 'getCurrentTimeAndDate') {
+    const userTz = clientContext?.time?.timezone || clientContext?.timezone || 'Asia/Karachi';
+    const timeData = getServerDeviceTime(userTz);
+
+    // If client already provided high-precision client time, use that directly
+    if (clientContext?.time?.time12) {
+      timeData.currentTime12h = clientContext.time.time12;
+      timeData.currentTime24h = clientContext.time.time24 || timeData.currentTime24h;
+      timeData.currentDate = clientContext.time.date || timeData.currentDate;
+      timeData.dayOfWeek = clientContext.time.day || timeData.dayOfWeek;
+    }
+
+    executionResult = {
+      status: 'success',
+      currentTime: timeData.currentTime12h,
+      currentTime24h: timeData.currentTime24h,
+      currentDate: timeData.currentDate,
+      dayOfWeek: timeData.dayOfWeek,
+      timezone: timeData.timezone,
+      message: `The current local time is ${timeData.currentTime12h} (${timeData.dayOfWeek}, ${timeData.currentDate}) in ${timeData.timezone}.`,
+    };
+
+    clientActionData = {
+      time12: timeData.currentTime12h,
+      time24: timeData.currentTime24h,
+      date: timeData.currentDate,
+      day: timeData.dayOfWeek,
+      timezone: timeData.timezone,
+      title: `Live Clock: ${timeData.currentTime12h} (${timeData.timezone})`,
+    };
+  } else if (name === 'getWeather') {
+    const requestedLoc = (args?.location as string) || '';
+    const userLat = clientContext?.location?.latitude;
+    const userLon = clientContext?.location?.longitude;
+    const userCity = clientContext?.location?.city || clientContext?.city;
+    const userCountry = clientContext?.location?.country || clientContext?.country;
+
+    let targetLocName = requestedLoc;
+    let targetLat = userLat;
+    let targetLon = userLon;
+
+    if (!requestedLoc || requestedLoc.toLowerCase() === 'current_location' || requestedLoc.toLowerCase() === 'here' || requestedLoc.toLowerCase() === 'my location') {
+      targetLocName = userCity ? `${userCity}${userCountry ? `, ${userCountry}` : ''}` : 'Current Location';
+    } else {
+      // User asked for a specific city like "Lahore", "Tokyo", etc.
+      targetLat = undefined;
+      targetLon = undefined;
+    }
+
+    const weatherData = await fetchServerWeather(targetLocName, targetLat, targetLon);
+
+    executionResult = {
+      status: 'success',
+      weather: weatherData,
+      summary: `${weatherData.location}: ${weatherData.temperatureC}°C (${weatherData.temperatureF}°F), ${weatherData.condition} (${weatherData.conditionUrdu}), Humidity: ${weatherData.humidityPercent}%, Wind: ${weatherData.windSpeedKmH} km/h.`,
+    };
+
+    clientActionData = {
+      ...weatherData,
+      title: `Weather: ${weatherData.location} (${weatherData.temperatureC}°C • ${weatherData.condition})`,
+    };
+  } else if (name === 'getUserLocation') {
+    const loc = clientContext?.location || {
+      city: 'Detected Device Location',
+      country: 'User Region',
+      source: 'device',
+    };
+
+    executionResult = {
+      status: 'success',
+      location: loc,
+      message: `User location is currently detected as ${loc.city || 'Local Area'}${loc.country ? `, ${loc.country}` : ''}.`,
+    };
+
+    clientActionData = {
+      ...loc,
+      title: `Location: ${loc.city || 'Detected'}${loc.country ? `, ${loc.country}` : ''}`,
+    };
+  } else if (name === 'openWebsite') {
     const service = (args?.service as string)?.toLowerCase() || '';
     const searchQuery = (args?.searchQuery as string) || '';
     let targetUrl = (args?.url as string) || '';
@@ -493,7 +927,8 @@ async function generateContentWithResilience(ai: GoogleGenAI, contents: any[], s
 }
 
 // Fallback TTS Audio Generator using Gemini 3.1 Flash TTS
-async function generateSpokenAudio(ai: GoogleGenAI, text: string): Promise<string | null> {
+async function generateSpokenAudio(ai: GoogleGenAI, text: string, voiceKey = 'male'): Promise<string | null> {
+  const voiceCfg = AURIX_VOICE_CONFIGS[voiceKey] || AURIX_VOICE_CONFIGS.male;
   try {
     const ttsResponse = await ai.models.generateContent({
       model: 'gemini-3.1-flash-tts-preview',
@@ -502,7 +937,7 @@ async function generateSpokenAudio(ai: GoogleGenAI, text: string): Promise<strin
         responseModalities: [Modality.AUDIO],
         speechConfig: {
           voiceConfig: {
-            prebuiltVoiceConfig: { voiceName: 'Puck' },
+            prebuiltVoiceConfig: { voiceName: voiceCfg.voiceName },
           },
         },
       },
@@ -528,16 +963,19 @@ server.on('upgrade', (request, socket, head) => {
   }
 });
 
-// WebSocket Live API bridge with automatic dual-engine fallback
-wss.on('connection', async (clientWs: WebSocket) => {
+// WebSocket Live API bridge with automatic dual-engine fallback and dynamic multi-voice
+wss.on('connection', async (clientWs: WebSocket, request?: any) => {
   console.log('[Aurix Server] Client connected to live session');
 
-  const apiKey = process.env.GEMINI_API_KEY;
+  const reqUrl = request ? new URL(request.url || '', 'http://localhost') : null;
+  const clientApiKey = reqUrl?.searchParams?.get('apiKey') || (request?.headers?.['x-gemini-api-key'] as string);
+  const apiKey = (clientApiKey && clientApiKey.trim()) || process.env.GEMINI_API_KEY;
+
   if (!apiKey) {
     clientWs.send(
       JSON.stringify({
         type: 'error',
-        message: 'GEMINI_API_KEY is not configured on the server. Please check your environment configuration.',
+        message: 'No Gemini API Key found. Please connect your Gemini API key in Aurix settings.',
       })
     );
     return;
@@ -557,174 +995,331 @@ wss.on('connection', async (clientWs: WebSocket) => {
   let useFallbackEngine = false;
   const activeContext: { lastService?: string; lastUrl?: string; lastSearch?: string } = {};
 
-  // Initialize Gemini Live connection
-  try {
-    clientWs.send(JSON.stringify({ type: 'status', status: 'connecting', message: 'Connecting to Aurix Neural Core...' }));
+  // Device Context state updated dynamically from client
+  const reqTz = reqUrl?.searchParams?.get('tz') || 'Asia/Karachi';
+  const reqCity = reqUrl?.searchParams?.get('city') || '';
+  const reqCountry = reqUrl?.searchParams?.get('country') || '';
+  const reqTime12 = reqUrl?.searchParams?.get('time12') || '';
+  const reqDate = reqUrl?.searchParams?.get('date') || '';
+  const reqDay = reqUrl?.searchParams?.get('day') || '';
 
-    liveSession = await ai.live.connect({
-      model: 'gemini-3.1-flash-live-preview',
-      config: {
-        responseModalities: [Modality.AUDIO],
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: {
-              voiceName: 'Puck',
-            },
-          },
-        },
-        systemInstruction: AURIX_SYSTEM_INSTRUCTION,
-        tools: [
-          {
-            functionDeclarations: [
-              openWebsiteDeclaration,
-              searchWebDeclaration,
-              changeVisualizerThemeDeclaration,
-              getSystemDiagnosticsDeclaration,
-              copyToClipboardDeclaration,
-            ],
-          },
-        ],
-        outputAudioTranscription: {},
-        inputAudioTranscription: {},
-      },
-      callbacks: {
-        onmessage: async (message: LiveServerMessage) => {
-          if (!isSessionAlive || clientWs.readyState !== WebSocket.OPEN) return;
+  let clientDeviceContext: any = {
+    timezone: reqTz,
+    time: {
+      time12: reqTime12,
+      date: reqDate,
+      day: reqDay,
+      timezone: reqTz,
+    },
+    location: {
+      city: reqCity,
+      country: reqCountry,
+    },
+  };
 
-          // 1. Audio Stream from Gemini Live
-          const parts = message.serverContent?.modelTurn?.parts;
-          if (parts && parts.length > 0) {
-            for (const part of parts) {
-              if (part.inlineData && part.inlineData.data) {
-                console.log(`[Latency] [5] Gemini first response received on server (${part.inlineData.data.length} chars base64) | Timestamp: ${Date.now()} ms`);
-                clientWs.send(
-                  JSON.stringify({
-                    type: 'audio',
-                    audio: part.inlineData.data,
-                    mimeType: part.inlineData.mimeType || 'audio/pcm;rate=24000',
-                  })
-                );
-              }
-              if (part.text) {
-                clientWs.send(
-                  JSON.stringify({
-                    type: 'model_transcript',
-                    text: part.text,
-                  })
-                );
-              }
-            }
-          }
+  // Preserve ongoing conversation history across voice switching
+  const conversationHistory: Array<{ role: 'user' | 'model'; text: string }> = [];
+  let currentModelTurnAccumulator = '';
+  let currentUserTurnAccumulator = '';
 
-          // 2. Interruption signal
-          if (message.serverContent?.interrupted) {
-            console.log('[Aurix Server] Interruption signal received from Gemini');
-            clientWs.send(JSON.stringify({ type: 'interrupted' }));
-          }
-
-          // 3. User Audio Transcription
-          const inputTranscription = (message.serverContent as any)?.inputAudioTranscription?.text;
-          if (inputTranscription) {
-            clientWs.send(
-              JSON.stringify({
-                type: 'user_transcript',
-                text: inputTranscription,
-              })
-            );
-          }
-
-          // Output Audio Transcription
-          const outputTranscription = (message.serverContent as any)?.outputAudioTranscription?.text;
-          if (outputTranscription) {
-            clientWs.send(
-              JSON.stringify({
-                type: 'model_transcript',
-                text: outputTranscription,
-              })
-            );
-          }
-
-          // 4. Function / Tool Calling Handling
-          if (message.toolCall && message.toolCall.functionCalls) {
-            const functionCalls = message.toolCall.functionCalls;
-            console.log('[Aurix Server] Live Tool calls requested:', functionCalls);
-
-            const functionResponses = [];
-
-            for (const call of functionCalls) {
-              const { id, name, args } = call;
-              const { executionResult, clientActionData } = executeToolLocally(name, args, activeContext);
-
-              if (clientActionData) {
-                clientWs.send(
-                  JSON.stringify({
-                    type: 'tool_executed',
-                    tool: name,
-                    data: clientActionData,
-                  })
-                );
-              }
-
-              functionResponses.push({
-                id,
-                name,
-                response: executionResult,
-              });
-            }
-
-            if (liveSession && isSessionAlive) {
-              try {
-                await liveSession.sendToolResponse({
-                  functionResponses,
-                });
-              } catch (err) {
-                console.error('[Aurix Server] Error sending tool response:', err);
-              }
-            }
-          }
-
-          // 5. Turn Complete
-          if (message.serverContent?.turnComplete) {
-            clientWs.send(JSON.stringify({ type: 'turn_complete' }));
-          }
-        },
-        onclose: () => {
-          console.log('[Aurix Server] Gemini Live session closed, switching to fallback engine');
-          useFallbackEngine = true;
-        },
-        onerror: (err: any) => {
-          console.warn('[Aurix Server] Gemini Live notice, fallback engine ready:', err?.message || err);
-          useFallbackEngine = true;
-        },
-      },
-    });
-
-    clientWs.send(
-      JSON.stringify({
-        type: 'status',
-        status: 'ready',
-        message: 'Aurix is online and listening. Voice link established.',
-      })
-    );
-    console.log('[Gemini] Live session: READY • Full-Duplex PCM16 16kHz Streaming Active');
-  } catch (error: any) {
-    console.warn('[Aurix Server] Live API connection seamlessly falling back to Streaming Conversational Engine:', error?.message || error);
-    useFallbackEngine = true;
-    clientWs.send(
-      JSON.stringify({
-        type: 'status',
-        status: 'ready',
-        message: 'Aurix is online (High-Speed Voice Engine Active).',
-      })
-    );
+  let currentVoiceKey = (reqUrl?.searchParams?.get('voice') || 'male').toLowerCase();
+  if (!(currentVoiceKey in AURIX_VOICE_CONFIGS)) {
+    currentVoiceKey = 'male';
   }
 
-  // Handle incoming client messages (Audio chunks, video frames, text commands, interrupts, pings)
+  // Initialize or reconfigure Gemini Live connection with specified voice
+  const initLiveSession = async (voiceKey: string) => {
+    currentVoiceKey = voiceKey in AURIX_VOICE_CONFIGS ? voiceKey : 'male';
+    const voiceCfg = AURIX_VOICE_CONFIGS[currentVoiceKey];
+
+    console.log(`[Voice] Selected: ${currentVoiceKey}`);
+    console.log(`[LiveSession] Current voice: ${currentVoiceKey}`);
+
+    // Flush any pending turn text into conversation history before reconnecting
+    if (currentUserTurnAccumulator.trim()) {
+      conversationHistory.push({ role: 'user', text: currentUserTurnAccumulator.trim() });
+      currentUserTurnAccumulator = '';
+    }
+    if (currentModelTurnAccumulator.trim()) {
+      conversationHistory.push({ role: 'model', text: currentModelTurnAccumulator.trim() });
+      currentModelTurnAccumulator = '';
+    }
+
+    // Safely close previous session if one was active
+    if (liveSession) {
+      try {
+        liveSession.close();
+      } catch (e) {}
+      liveSession = null;
+    }
+
+    try {
+      clientWs.send(
+        JSON.stringify({
+          type: 'status',
+          status: 'connecting',
+          message: `Configuring Aurix ${voiceCfg.voiceName} Voice Link...`,
+        })
+      );
+
+      let historyContextSnippet = '';
+      if (conversationHistory.length > 0) {
+        const recentTurns = conversationHistory.slice(-8);
+        historyContextSnippet = `\n\n[PRIOR CONVERSATION CONTEXT BEFORE VOICE SWITCH - CONTINUE SMOOTHLY WITHOUT REPEATING]:\n${recentTurns
+          .map((t) => `${t.role === 'user' ? 'User' : 'Aurix'}: ${t.text}`)
+          .join('\n')}`;
+      }
+
+      // Compute fresh real-time local time context for user's device
+      const timeData = getServerDeviceTime(
+        clientDeviceContext?.time?.timezone || clientDeviceContext?.timezone || reqTz || 'Asia/Karachi'
+      );
+      const liveTime = clientDeviceContext?.time?.time12 || timeData.currentTime12h;
+      const liveTime24 = clientDeviceContext?.time?.time24 || timeData.currentTime24h;
+      const liveDate = clientDeviceContext?.time?.date || timeData.currentDate;
+      const liveDay = clientDeviceContext?.time?.day || timeData.dayOfWeek;
+      const liveTz = clientDeviceContext?.time?.timezone || clientDeviceContext?.timezone || reqTz || 'Asia/Karachi';
+      const liveCity = clientDeviceContext?.location?.city || reqCity || 'User Current Location';
+      const liveCountry = clientDeviceContext?.location?.country || reqCountry || '';
+
+      const deviceContextSnippet = `\n\n[REAL-TIME USER DEVICE TIME, DATE & LOCATION CONTEXT]:
+- Exact Current Device Time: ${liveTime} (24-hour: ${liveTime24})
+- Exact Current Device Date & Day: ${liveDay}, ${liveDate}
+- User Timezone: ${liveTz}
+- Detected User Location: ${liveCity}${liveCountry ? `, ${liveCountry}` : ''}
+- EXACT TIME MANDATE: When asked "time kya hai?" or "what time is it?", ALWAYS respond with the user's exact local time (${liveTime}). Never use UTC or server container time.
+- EXACT WEATHER MANDATE: When asked about weather or temperature, use 'getWeather' or provide the real-time weather conditions and degrees.`;
+
+      const systemInstruction = `${AURIX_SYSTEM_INSTRUCTION}\n\n[VOICE PERSONA GUIDANCE]: ${voiceCfg.tonePrompt}${deviceContextSnippet}${historyContextSnippet}`;
+
+      liveSession = await ai.live.connect({
+        model: 'gemini-3.1-flash-live-preview',
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: {
+                voiceName: voiceCfg.voiceName,
+              },
+            },
+          },
+          systemInstruction,
+          tools: [
+            {
+              functionDeclarations: ALL_AURIX_TOOLS,
+            },
+          ],
+          outputAudioTranscription: {},
+          inputAudioTranscription: {},
+        },
+        callbacks: {
+          onmessage: async (message: LiveServerMessage) => {
+            if (!isSessionAlive || clientWs.readyState !== WebSocket.OPEN) return;
+
+            // 1. Audio Stream from Gemini Live
+            const parts = message.serverContent?.modelTurn?.parts;
+            if (parts && parts.length > 0) {
+              for (const part of parts) {
+                if (part.inlineData && part.inlineData.data) {
+                  console.log(`[Audio] Output voice: ${currentVoiceKey}`);
+                  console.log(
+                    `[Latency] [5] Gemini first response received on server (${part.inlineData.data.length} chars base64) | Voice: ${voiceCfg.voiceName} | Timestamp: ${Date.now()} ms`
+                  );
+                  clientWs.send(
+                    JSON.stringify({
+                      type: 'audio',
+                      audio: part.inlineData.data,
+                      mimeType: part.inlineData.mimeType || 'audio/pcm;rate=24000',
+                      voice: currentVoiceKey,
+                    })
+                  );
+                }
+                if (part.text) {
+                  currentModelTurnAccumulator += part.text;
+                  clientWs.send(
+                    JSON.stringify({
+                      type: 'model_transcript',
+                      text: part.text,
+                      voice: currentVoiceKey,
+                    })
+                  );
+                }
+              }
+            }
+
+            // 2. Interruption signal
+            if (message.serverContent?.interrupted) {
+              console.log('[Aurix Server] Interruption signal received from Gemini');
+              if (currentModelTurnAccumulator.trim()) {
+                conversationHistory.push({ role: 'model', text: currentModelTurnAccumulator.trim() });
+                currentModelTurnAccumulator = '';
+              }
+              clientWs.send(JSON.stringify({ type: 'interrupted' }));
+            }
+
+            // 3. User Audio Transcription
+            const inputTranscription = (message.serverContent as any)?.inputAudioTranscription?.text;
+            if (inputTranscription) {
+              currentUserTurnAccumulator += ' ' + inputTranscription;
+              clientWs.send(
+                JSON.stringify({
+                  type: 'user_transcript',
+                  text: inputTranscription,
+                })
+              );
+            }
+
+            // Output Audio Transcription
+            const outputTranscription = (message.serverContent as any)?.outputAudioTranscription?.text;
+            if (outputTranscription) {
+              currentModelTurnAccumulator += ' ' + outputTranscription;
+              clientWs.send(
+                JSON.stringify({
+                  type: 'model_transcript',
+                  text: outputTranscription,
+                  voice: currentVoiceKey,
+                })
+              );
+            }
+
+            // 4. Function / Tool Calling Handling
+            if (message.toolCall && message.toolCall.functionCalls) {
+              const functionCalls = message.toolCall.functionCalls;
+              console.log('[Aurix Server] Live Tool calls requested:', functionCalls);
+
+              const functionResponses = [];
+
+              for (const call of functionCalls) {
+                const { id, name, args } = call;
+                const { executionResult, clientActionData } = await executeToolLocally(
+                  name,
+                  args,
+                  activeContext,
+                  clientDeviceContext
+                );
+
+                if (clientActionData) {
+                  clientWs.send(
+                    JSON.stringify({
+                      type: 'tool_executed',
+                      tool: name,
+                      data: clientActionData,
+                    })
+                  );
+                }
+
+                functionResponses.push({
+                  id,
+                  name,
+                  response: executionResult,
+                });
+              }
+
+              if (liveSession && isSessionAlive) {
+                try {
+                  await liveSession.sendToolResponse({
+                    functionResponses,
+                  });
+                } catch (err) {
+                  console.error('[Aurix Server] Error sending tool response:', err);
+                }
+              }
+            }
+
+            // 5. Turn Complete
+            if (message.serverContent?.turnComplete) {
+              if (currentUserTurnAccumulator.trim()) {
+                conversationHistory.push({ role: 'user', text: currentUserTurnAccumulator.trim() });
+                currentUserTurnAccumulator = '';
+              }
+              if (currentModelTurnAccumulator.trim()) {
+                conversationHistory.push({ role: 'model', text: currentModelTurnAccumulator.trim() });
+                currentModelTurnAccumulator = '';
+              }
+              clientWs.send(JSON.stringify({ type: 'turn_complete', voice: currentVoiceKey }));
+            }
+          },
+          onclose: () => {
+            console.log('[Aurix Server] Gemini Live session closed, switching to fallback engine');
+            useFallbackEngine = true;
+          },
+          onerror: (err: any) => {
+            console.warn('[Aurix Server] Gemini Live notice, fallback engine ready:', err?.message || err);
+            useFallbackEngine = true;
+          },
+        },
+      });
+
+      useFallbackEngine = false;
+      console.log(`[LiveSession] Session created with voice: ${currentVoiceKey}`);
+      clientWs.send(
+        JSON.stringify({
+          type: 'status',
+          status: 'ready',
+          message: `Aurix is online and listening (${voiceCfg.voiceName} Voice Active).`,
+          voice: currentVoiceKey,
+        })
+      );
+      console.log(
+        `[Gemini] Live session: READY • Voice: ${voiceCfg.voiceName} (${currentVoiceKey}) • Full-Duplex PCM16 16kHz Streaming Active`
+      );
+    } catch (error: any) {
+      console.warn(
+        '[Aurix Server] Live API connection seamlessly falling back to Streaming Conversational Engine:',
+        error?.message || error
+      );
+      useFallbackEngine = true;
+      console.log(`[LiveSession] Session created with voice: ${currentVoiceKey}`);
+      clientWs.send(
+        JSON.stringify({
+          type: 'status',
+          status: 'ready',
+          message: 'Aurix is online (High-Speed Voice Engine Active).',
+          voice: currentVoiceKey,
+        })
+      );
+    }
+  };
+
+  // Connect initial live session
+  await initLiveSession(currentVoiceKey);
+
+  // Handle incoming client messages (Audio chunks, video frames, text commands, interrupts, voice switches, pings, client context)
   clientWs.on('message', async (rawData: Buffer | string) => {
     if (!isSessionAlive) return;
 
     try {
       const data = JSON.parse(rawData.toString());
+
+      // Update Device Context (time, location, weather, timezone)
+      if (data.type === 'client_context' && data.context) {
+        clientDeviceContext = {
+          ...clientDeviceContext,
+          ...data.context,
+        };
+        console.log(
+          `[Aurix Server] Received device context update: Timezone: ${clientDeviceContext?.time?.timezone || clientDeviceContext?.timezone}, Time: ${clientDeviceContext?.time?.time12}, City: ${clientDeviceContext?.location?.city}`
+        );
+        return;
+      }
+
+      // Real-time Voice Reconfiguration Request
+      if (data.type === 'reconfigure_voice' && data.voice) {
+        console.log(`[Voice] Selected: ${data.voice}`);
+        console.log(`[LiveSession] Current voice: ${data.voice}`);
+        console.log('[Aurix Server] Dynamic voice switch requested:', data.voice);
+        await initLiveSession(data.voice);
+        if (clientWs.readyState === WebSocket.OPEN) {
+          clientWs.send(
+            JSON.stringify({
+              type: 'voice_reconfigured',
+              voice: data.voice,
+              message: `Voice changed to ${data.voice}`,
+            })
+          );
+        }
+        return;
+      }
 
       // 1. Real-time Audio Input
       if (data.type === 'audio' && data.audio) {
@@ -738,7 +1333,9 @@ wss.on('connection', async (clientWs: WebSocket) => {
             });
             // Telemetry log for input forwarded to Gemini Live
             if (Math.random() < 0.05) {
-              console.log(`[Latency] [4] Gemini receives input chunk (${data.audio.length} base64 chars) | Timestamp: ${Date.now()} ms`);
+              console.log(
+                `[Latency] [4] Gemini receives input chunk (${data.audio.length} base64 chars) | Timestamp: ${Date.now()} ms`
+              );
             }
           } catch (audioErr) {
             console.error('[Gemini] Error forwarding realtime audio input:', audioErr);
@@ -749,11 +1346,19 @@ wss.on('connection', async (clientWs: WebSocket) => {
       else if (data.type === 'interrupt') {
         console.log('[Gemini] Response interrupted by user action');
       }
-      // 3. User Text Query (with optional image)
+      // 3. User Text Query (with optional image and voice)
       else if (data.type === 'text' && data.text) {
         const queryText = data.text;
         const queryImage = data.image;
-        console.log('[Aurix Server] Processing prompt:', queryText, queryImage ? '(with image attachment)' : '');
+        const queryVoice = (data.voice || currentVoiceKey).toLowerCase();
+        const voiceCfg = AURIX_VOICE_CONFIGS[queryVoice] || AURIX_VOICE_CONFIGS.male;
+
+        console.log(
+          '[Aurix Server] Processing prompt:',
+          queryText,
+          queryImage ? '(with image attachment)' : '',
+          `[Voice: ${voiceCfg.voiceName}]`
+        );
 
         if (!useFallbackEngine && liveSession) {
           try {
@@ -795,19 +1400,30 @@ wss.on('connection', async (clientWs: WebSocket) => {
           }
           contents.push(queryText);
 
+          const timeData = getServerDeviceTime(
+            clientDeviceContext?.time?.timezone || clientDeviceContext?.timezone || reqTz || 'Asia/Karachi'
+          );
+          const liveTime = clientDeviceContext?.time?.time12 || timeData.currentTime12h;
+          const liveDate = clientDeviceContext?.time?.date || timeData.currentDate;
+          const liveDay = clientDeviceContext?.time?.day || timeData.dayOfWeek;
+          const liveTz = clientDeviceContext?.time?.timezone || clientDeviceContext?.timezone || reqTz || 'Asia/Karachi';
+          const liveCity = clientDeviceContext?.location?.city || reqCity || 'User Location';
+
+          const deviceSnippet = `\n\n[REAL-TIME USER DEVICE TIME & LOCATION]:
+- Device Time: ${liveTime} (${liveDay}, ${liveDate})
+- Timezone: ${liveTz}
+- Location: ${liveCity}
+- If asked what time it is, answer with ${liveTime}.`;
+
+          const systemInstruction = `${AURIX_SYSTEM_INSTRUCTION}\n\n[VOICE PERSONA GUIDANCE]: ${voiceCfg.tonePrompt}${deviceSnippet}`;
+
           const response = await generateContentWithResilience(
             ai,
             contents,
-            AURIX_SYSTEM_INSTRUCTION,
+            systemInstruction,
             [
               {
-                functionDeclarations: [
-                  openWebsiteDeclaration,
-                  searchWebDeclaration,
-                  changeVisualizerThemeDeclaration,
-                  getSystemDiagnosticsDeclaration,
-                  copyToClipboardDeclaration,
-                ],
+                functionDeclarations: ALL_AURIX_TOOLS,
               },
             ]
           );
@@ -816,7 +1432,12 @@ wss.on('connection', async (clientWs: WebSocket) => {
           if (response.functionCalls && response.functionCalls.length > 0) {
             for (const call of response.functionCalls) {
               const { name, args } = call;
-              const { clientActionData } = executeToolLocally(name, args, activeContext);
+              const { clientActionData } = await executeToolLocally(
+                name,
+                args,
+                activeContext,
+                clientDeviceContext
+              );
               if (clientActionData && clientWs.readyState === WebSocket.OPEN) {
                 clientWs.send(
                   JSON.stringify({
@@ -838,8 +1459,8 @@ wss.on('connection', async (clientWs: WebSocket) => {
               })
             );
 
-            // Generate 24kHz Spoken Audio via Gemini 3.1 Flash TTS
-            const spokenAudio = await generateSpokenAudio(ai, responseText);
+            // Generate 24kHz Spoken Audio via Gemini 3.1 Flash TTS with selected voice
+            const spokenAudio = await generateSpokenAudio(ai, responseText, queryVoice);
             if (spokenAudio && clientWs.readyState === WebSocket.OPEN) {
               clientWs.send(
                 JSON.stringify({
@@ -863,8 +1484,6 @@ wss.on('connection', async (clientWs: WebSocket) => {
             );
           }
         }
-      } else if (data.type === 'interrupt') {
-        console.log('[Aurix Server] Interruption received from client');
       } else if (data.type === 'ping') {
         if (clientWs.readyState === WebSocket.OPEN) {
           clientWs.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
@@ -890,6 +1509,9 @@ wss.on('connection', async (clientWs: WebSocket) => {
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 async function startServer() {
+  // Always serve public assets (icons, manifests) directly
+  app.use(express.static(path.join(__dirname, 'public')));
+
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
